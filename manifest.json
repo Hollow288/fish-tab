@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Fish Tab",
+  "version": "0.2.0",
+  "description": "用浏览器侧边栏按域名管理已打开的标签页。",
+  "minimum_chrome_version": "114",
+  "action": {
+    "default_title": "Fish Tab"
+  },
+  "permissions": [
+    "tabs",
+    "sidePanel",
+    "storage",
+    "sessions",
+    "favicon"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["_favicon/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/sidepanel.html"
+  }
+}

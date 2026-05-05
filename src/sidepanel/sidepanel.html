@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fish Tab</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-stats" data-state="info" aria-live="polite"></div>
+      <div class="app-actions">
+        <button
+          type="button"
+          class="icon-button"
+          data-action="toggle-all"
+          aria-label="全部折叠"
+          title="全部折叠"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 7h16" />
+            <path d="M4 12h16" />
+            <path d="M4 17h16" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="icon-button"
+          data-action="refresh"
+          aria-label="刷新"
+          title="刷新"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <path d="M21 3v6h-6" />
+          </svg>
+        </button>
+      </div>
+    </header>
+    <div class="app-search">
+      <div class="search-field">
+        <input
+          type="search"
+          class="search-input"
+          placeholder="按域名或标题搜索..."
+          aria-label="搜索标签页"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button
+          type="button"
+          class="search-clear"
+          data-action="clear-search"
+          hidden
+          aria-label="清除搜索"
+          title="清除搜索"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="view-switcher" role="tablist" aria-label="标签页视图">
+        <button
+          type="button"
+          class="view-button"
+          data-view="open"
+          role="tab"
+          aria-selected="true"
+          aria-controls="tab-list-view"
+        >
+          打开中
+        </button>
+        <button
+          type="button"
+          class="view-button"
+          data-view="closed"
+          role="tab"
+          aria-selected="false"
+          aria-controls="tab-list-view"
+        >
+          最近关闭
+        </button>
+      </div>
+    </div>
+    <main class="app-groups" id="tab-list-view"></main>
+    <aside class="preview-card" data-visible="false" aria-hidden="true">
+      <div class="preview-image">
+        <img class="preview-image-img" alt="" hidden />
+        <div class="preview-image-empty"></div>
+      </div>
+    </aside>
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>
