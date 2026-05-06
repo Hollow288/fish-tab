@@ -1,4 +1,10 @@
 import { MESSAGE_TYPES } from "../shared/messages.js";
+import {
+  DEFAULT_SETTINGS,
+  PERIODIC_CAPTURE_INTERVAL_OPTIONS_MS,
+  SETTINGS_STORAGE_KEY,
+  sanitizeSettings
+} from "../shared/settings.js";
 
 const COLLAPSED_DOMAINS_KEY = "fishTabCollapsedDomains";
 const AUTO_REFRESH_DEBOUNCE_MS = 180;
@@ -27,12 +33,22 @@ const state = {
 const elements = {
   toggleAll: document.querySelector('[data-action="toggle-all"]'),
   refresh: document.querySelector('[data-action="refresh"]'),
+  openSettings: document.querySelector('[data-action="open-settings"]'),
+  closeSettings: document.querySelector('[data-action="close-settings"]'),
+  settingsPanel: document.querySelector(".settings-panel"),
+  settingsToggle: document.querySelector('[data-setting="periodicCaptureEnabled"]'),
+  settingsInterval: document.querySelector('[data-setting="periodicCaptureIntervalMs"]'),
   stats: document.querySelector(".app-stats"),
   groups: document.querySelector(".app-groups"),
   searchInput: document.querySelector(".search-input"),
   searchClear: document.querySelector(".search-clear"),
   viewSwitcher: document.querySelector(".view-switcher"),
   viewButtons: document.querySelectorAll(".view-button")
+};
+
+const settingsState = {
+  values: { ...DEFAULT_SETTINGS },
+  loaded: false
 };
 
 const previewElements = {
@@ -62,6 +78,20 @@ function initialize() {
   elements.searchClear.addEventListener("click", clearSearch);
   elements.viewSwitcher.addEventListener("click", handleViewSwitcherClick);
 
+  if (elements.openSettings) {
+    elements.openSettings.addEventListener("click", openSettingsPanel);
+  }
+  if (elements.closeSettings) {
+    elements.closeSettings.addEventListener("click", closeSettingsPanel);
+  }
+  if (elements.settingsToggle) {
+    elements.settingsToggle.addEventListener("change", handleSettingsToggleChange);
+  }
+  if (elements.settingsInterval) {
+    elements.settingsInterval.addEventListener("change", handleSettingsIntervalChange);
+  }
+  document.addEventListener("keydown", handleGlobalKeydown);
+
   if (
     typeof chrome !== "undefined" &&
     chrome.runtime &&
@@ -71,8 +101,13 @@ function initialize() {
     chrome.runtime.onMessage.addListener(handleRuntimeMessage);
   }
 
+  if (chrome.storage?.onChanged && typeof chrome.storage.onChanged.addListener === "function") {
+    chrome.storage.onChanged.addListener(handleStorageChanged);
+  }
+
   initHoverPreview();
   loadCollapsedDomains();
+  loadSettings();
   renderViewSwitcher();
   refreshCurrentView();
 }
@@ -991,7 +1026,10 @@ function createRecentlyClosedRow(item) {
   });
   restore.dataset.sessionId = item.sessionId || "";
   restore.disabled = !item.sessionId;
-  restore.appendChild(createIcon(["M9 14 4 9l5-5", "M4 9h10a6 6 0 1 1-6 6"]));
+  restore.appendChild(createIcon([
+    "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+    "M3 3v5h5"
+  ]));
 
   row.append(favicon, text, badges, restore);
   return row;
@@ -1172,6 +1210,110 @@ function saveCollapsedDomains() {
   storage.set({
     [COLLAPSED_DOMAINS_KEY]: Array.from(state.collapsedDomains)
   });
+}
+
+function loadSettings() {
+  const storage = getStorage();
+  if (!storage) {
+    applySettingsToControls();
+    return;
+  }
+
+  storage.get(SETTINGS_STORAGE_KEY, (result) => {
+    settingsState.values = sanitizeSettings(result?.[SETTINGS_STORAGE_KEY]);
+    settingsState.loaded = true;
+    applySettingsToControls();
+  });
+}
+
+function applySettingsToControls() {
+  if (elements.settingsToggle) {
+    elements.settingsToggle.checked = settingsState.values.periodicCaptureEnabled;
+  }
+  if (elements.settingsInterval) {
+    const value = String(settingsState.values.periodicCaptureIntervalMs);
+    if (PERIODIC_CAPTURE_INTERVAL_OPTIONS_MS.map(String).includes(value)) {
+      elements.settingsInterval.value = value;
+    }
+    elements.settingsInterval.disabled = !settingsState.values.periodicCaptureEnabled;
+  }
+}
+
+function persistSettings() {
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+
+  storage.set({ [SETTINGS_STORAGE_KEY]: { ...settingsState.values } });
+}
+
+function handleSettingsToggleChange(event) {
+  settingsState.values = sanitizeSettings({
+    ...settingsState.values,
+    periodicCaptureEnabled: Boolean(event.target.checked)
+  });
+  applySettingsToControls();
+  persistSettings();
+}
+
+function handleSettingsIntervalChange(event) {
+  settingsState.values = sanitizeSettings({
+    ...settingsState.values,
+    periodicCaptureIntervalMs: Number(event.target.value)
+  });
+  applySettingsToControls();
+  persistSettings();
+}
+
+function handleStorageChanged(changes, area) {
+  if (area !== "local" || !changes[SETTINGS_STORAGE_KEY]) {
+    return;
+  }
+
+  settingsState.values = sanitizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
+  applySettingsToControls();
+}
+
+function openSettingsPanel() {
+  if (!elements.settingsPanel) {
+    return;
+  }
+
+  elements.settingsPanel.dataset.open = "true";
+  elements.settingsPanel.setAttribute("aria-hidden", "false");
+  if (elements.openSettings) {
+    elements.openSettings.setAttribute("aria-expanded", "true");
+  }
+  resetHoverPreview();
+
+  if (elements.closeSettings) {
+    elements.closeSettings.focus();
+  }
+}
+
+function closeSettingsPanel() {
+  if (!elements.settingsPanel || elements.settingsPanel.dataset.open !== "true") {
+    return;
+  }
+
+  elements.settingsPanel.dataset.open = "false";
+  elements.settingsPanel.setAttribute("aria-hidden", "true");
+  if (elements.openSettings) {
+    elements.openSettings.setAttribute("aria-expanded", "false");
+    elements.openSettings.focus();
+  }
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key !== "Escape") {
+    return;
+  }
+
+  if (elements.settingsPanel?.dataset.open === "true") {
+    event.preventDefault();
+    closeSettingsPanel();
+  }
 }
 
 function getStorage() {

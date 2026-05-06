@@ -35,8 +35,69 @@
             <path d="M21 3v6h-6" />
           </svg>
         </button>
+        <button
+          type="button"
+          class="icon-button"
+          data-action="open-settings"
+          aria-label="设置"
+          title="设置"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09c0 .68.4 1.3 1.03 1.56a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87c.26.62.88 1.03 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z" />
+          </svg>
+        </button>
       </div>
     </header>
+    <div class="settings-panel" data-open="false" aria-hidden="true" role="dialog" aria-label="设置">
+      <div class="settings-header">
+        <h2 class="settings-title">设置</h2>
+        <button
+          type="button"
+          class="icon-button"
+          data-action="close-settings"
+          aria-label="关闭设置"
+          title="关闭"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6 6 18" />
+            <path d="M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <section class="settings-section">
+          <div class="settings-section-head">
+            <h3 class="settings-section-title">缩略图</h3>
+            <p class="settings-section-desc">
+              切换标签时立即截图，并在 1.5 秒后再截一次以捕获页面渲染完毕的状态。开启下方"定时刷新"后，停留期间还会按设定频率持续更新缩略图。
+            </p>
+          </div>
+          <label class="settings-row settings-row--toggle">
+            <span class="settings-row-label">定时刷新当前标签</span>
+            <input
+              type="checkbox"
+              class="settings-toggle"
+              data-setting="periodicCaptureEnabled"
+            />
+          </label>
+          <label class="settings-row settings-row--select">
+            <span class="settings-row-label">刷新间隔</span>
+            <select class="settings-select" data-setting="periodicCaptureIntervalMs">
+              <option value="10000">10 秒</option>
+              <option value="15000">15 秒</option>
+              <option value="30000">30 秒</option>
+              <option value="60000">60 秒</option>
+            </select>
+          </label>
+          <p class="settings-hint">
+            仅在窗口被聚焦时刷新；切换到其他应用或窗口时自动暂停。
+          </p>
+        </section>
+      </div>
+    </div>
     <div class="app-search">
       <div class="search-field">
         <input

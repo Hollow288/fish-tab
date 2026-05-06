@@ -15,7 +15,7 @@ export function ensureRestored() {
   return restorePromise;
 }
 
-export async function captureForTab(tabId, windowId) {
+export async function captureForTab(tabId, windowId, options = {}) {
   await ensureRestored();
   const numericTabId = Number(tabId);
   const numericWindowId = Number(windowId);
@@ -25,7 +25,7 @@ export async function captureForTab(tabId, windowId) {
 
   const now = Date.now();
   const last = captureCooldowns.get(numericTabId) || 0;
-  if (now - last < CAPTURE_THROTTLE_MS) {
+  if (!options.force && now - last < CAPTURE_THROTTLE_MS) {
     return;
   }
   captureCooldowns.set(numericTabId, now);

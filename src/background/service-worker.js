@@ -1,5 +1,10 @@
 import { MESSAGE_TYPES } from "../shared/messages.js";
 import {
+  DEFAULT_SETTINGS,
+  SETTINGS_STORAGE_KEY,
+  sanitizeSettings
+} from "../shared/settings.js";
+import {
   captureForTab,
   ensureRestored,
   evictIfPresent,
@@ -15,8 +20,20 @@ import {
 } from "./tabs.js";
 
 const TABS_CHANGED_DEBOUNCE_MS = 120;
+const ACTIVATION_SETTLE_DELAY_MS = 1500;
 
 let tabsChangedTimer = null;
+
+let settings = { ...DEFAULT_SETTINGS };
+
+const tracking = {
+  tabId: null,
+  windowId: null,
+  settleTimer: null,
+  periodicTimer: null
+};
+
+let focusedWindowId = chrome.windows?.WINDOW_ID_NONE ?? -1;
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -37,6 +54,20 @@ if (chrome.runtime.onStartup) {
 }
 
 void ensureRestored();
+void bootstrapSettingsAndFocus();
+
+if (chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[SETTINGS_STORAGE_KEY]) {
+      return;
+    }
+
+    settings = sanitizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
+    if (tracking.tabId !== null && tracking.windowId !== null) {
+      restartPeriodicCapture();
+    }
+  });
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== "string") {
@@ -90,7 +121,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   scheduleTabsChangedNotification();
-  void captureForTab(tabId, windowId);
+  trackActiveTab(tabId, windowId);
+  void captureForTab(tabId, windowId, { force: true });
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -101,14 +133,38 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 
   if (changeInfo.status === "complete" && tab?.active && typeof tab.windowId === "number") {
-    void captureForTab(tabId, tab.windowId);
+    void captureForTab(tabId, tab.windowId, { force: true });
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   scheduleTabsChangedNotification();
   void removeCapture(tabId);
+  if (tracking.tabId === tabId) {
+    stopTracking();
+  }
 });
+
+if (chrome.windows?.onFocusChanged) {
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    focusedWindowId = windowId;
+
+    if (windowId === chrome.windows.WINDOW_ID_NONE) {
+      clearPeriodicTimer();
+      return;
+    }
+
+    void onWindowFocused(windowId);
+  });
+}
+
+if (chrome.windows?.onRemoved) {
+  chrome.windows.onRemoved.addListener((windowId) => {
+    if (tracking.windowId === windowId) {
+      stopTracking();
+    }
+  });
+}
 
 const otherTabEvents = [
   chrome.tabs.onCreated,
@@ -160,6 +216,116 @@ async function handleGetCapture(tabId) {
   }
 
   return null;
+}
+
+async function bootstrapSettingsAndFocus() {
+  try {
+    if (chrome.storage?.local) {
+      const result = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
+      settings = sanitizeSettings(result?.[SETTINGS_STORAGE_KEY]);
+    }
+  } catch (error) {
+    console.warn("[fish-tab] failed to load settings", error);
+  }
+
+  try {
+    const focused = await chrome.windows.getLastFocused({ populate: false });
+    if (focused?.focused && typeof focused.id === "number") {
+      focusedWindowId = focused.id;
+      const [tab] = await chrome.tabs.query({ active: true, windowId: focused.id });
+      if (tab?.id != null) {
+        trackActiveTab(tab.id, focused.id);
+        void captureForTab(tab.id, focused.id, { force: true });
+      }
+    }
+  } catch (error) {
+    console.warn("[fish-tab] focus bootstrap failed", error);
+  }
+}
+
+async function onWindowFocused(windowId) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, windowId });
+    if (tab?.id != null) {
+      trackActiveTab(tab.id, windowId);
+      void captureForTab(tab.id, windowId, { force: true });
+    }
+  } catch (error) {
+    console.warn("[fish-tab] onWindowFocused failed", error);
+  }
+}
+
+function trackActiveTab(tabId, windowId) {
+  const numericTabId = Number(tabId);
+  const numericWindowId = Number(windowId);
+  if (!Number.isInteger(numericTabId) || !Number.isInteger(numericWindowId)) {
+    return;
+  }
+
+  tracking.tabId = numericTabId;
+  tracking.windowId = numericWindowId;
+
+  scheduleSettleCapture(numericTabId, numericWindowId);
+  restartPeriodicCapture();
+}
+
+function stopTracking() {
+  clearSettleTimer();
+  clearPeriodicTimer();
+  tracking.tabId = null;
+  tracking.windowId = null;
+}
+
+function scheduleSettleCapture(tabId, windowId) {
+  clearSettleTimer();
+  tracking.settleTimer = setTimeout(() => {
+    tracking.settleTimer = null;
+    if (tracking.tabId === tabId && tracking.windowId === windowId) {
+      void captureForTab(tabId, windowId, { force: true });
+    }
+  }, ACTIVATION_SETTLE_DELAY_MS);
+}
+
+function restartPeriodicCapture() {
+  clearPeriodicTimer();
+
+  if (!settings.periodicCaptureEnabled) {
+    return;
+  }
+
+  const tabId = tracking.tabId;
+  const windowId = tracking.windowId;
+  if (tabId === null || windowId === null) {
+    return;
+  }
+
+  if (focusedWindowId !== windowId) {
+    return;
+  }
+
+  tracking.periodicTimer = setInterval(() => {
+    if (
+      tracking.tabId === tabId &&
+      tracking.windowId === windowId &&
+      focusedWindowId === windowId
+    ) {
+      void captureForTab(tabId, windowId, { force: true });
+    }
+  }, settings.periodicCaptureIntervalMs);
+}
+
+function clearSettleTimer() {
+  if (tracking.settleTimer) {
+    clearTimeout(tracking.settleTimer);
+    tracking.settleTimer = null;
+  }
+}
+
+function clearPeriodicTimer() {
+  if (tracking.periodicTimer) {
+    clearInterval(tracking.periodicTimer);
+    tracking.periodicTimer = null;
+  }
 }
 
 async function warmUpCaptures() {
