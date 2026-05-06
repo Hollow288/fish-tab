@@ -833,6 +833,7 @@ function createStat(label, value) {
 }
 
 function renderGroups() {
+  const previousScrollTop = elements.groups.scrollTop;
   resetHoverPreview();
   elements.groups.replaceChildren();
 
@@ -841,15 +842,18 @@ function renderGroups() {
     loading.className = "loading";
     loading.textContent = "加载中...";
     elements.groups.appendChild(loading);
+    restoreGroupsScroll(previousScrollTop);
     return;
   }
 
   if (getCurrentError()) {
+    restoreGroupsScroll(previousScrollTop);
     return;
   }
 
   if (state.view === VIEW_CLOSED) {
     renderRecentlyClosedItems();
+    restoreGroupsScroll(previousScrollTop);
     return;
   }
 
@@ -862,6 +866,7 @@ function renderGroups() {
       ? "没有匹配的标签页。"
       : "没有可展示的标签页。";
     elements.groups.appendChild(empty);
+    restoreGroupsScroll(previousScrollTop);
     return;
   }
 
@@ -871,6 +876,16 @@ function renderGroups() {
   }
 
   elements.groups.appendChild(fragment);
+  restoreGroupsScroll(previousScrollTop);
+}
+
+function restoreGroupsScroll(scrollTop) {
+  if (!scrollTop) {
+    return;
+  }
+
+  const maxScrollTop = elements.groups.scrollHeight - elements.groups.clientHeight;
+  elements.groups.scrollTop = Math.min(scrollTop, Math.max(0, maxScrollTop));
 }
 
 function renderRecentlyClosedItems() {
