@@ -9,7 +9,8 @@ import {
   ensureRestored,
   evictIfPresent,
   getCapture,
-  removeCapture
+  removeCapture,
+  setCaptureEnabled
 } from "./captures.js";
 import {
   activateTab,
@@ -66,6 +67,11 @@ if (chrome.storage?.onChanged) {
     }
 
     settings = sanitizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
+    setCaptureEnabled(settings.previewEnabled);
+    if (!settings.previewEnabled) {
+      clearPeriodicTimer();
+      clearSettleTimer();
+    }
     if (tracking.tabId !== null && tracking.windowId !== null) {
       restartPeriodicCapture();
     }
@@ -261,6 +267,8 @@ async function bootstrapSettingsAndFocus() {
     console.warn("[fish-tab] failed to load settings", error);
   }
 
+  setCaptureEnabled(settings.previewEnabled);
+
   try {
     const focused = await chrome.windows.getLastFocused({ populate: false });
     if (focused?.focused && typeof focused.id === "number") {
@@ -322,7 +330,7 @@ function scheduleSettleCapture(tabId, windowId) {
 function restartPeriodicCapture() {
   clearPeriodicTimer();
 
-  if (!settings.periodicCaptureEnabled) {
+  if (!settings.previewEnabled || !settings.periodicCaptureEnabled) {
     return;
   }
 

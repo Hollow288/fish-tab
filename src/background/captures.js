@@ -30,6 +30,24 @@ const retryTimers = new Map();
 let restorePromise = null;
 let persistInFlight = false;
 let persistPending = false;
+let captureEnabled = true;
+
+export function setCaptureEnabled(value) {
+  const next = Boolean(value);
+  if (captureEnabled === next) {
+    return;
+  }
+
+  captureEnabled = next;
+  if (!captureEnabled) {
+    for (const timer of retryTimers.values()) {
+      clearTimeout(timer);
+    }
+    retryTimers.clear();
+    cache.clear();
+    void persistToSession();
+  }
+}
 
 export function ensureRestored() {
   if (!restorePromise) {
@@ -39,6 +57,9 @@ export function ensureRestored() {
 }
 
 export async function captureForTab(tabId, windowId, options = {}) {
+  if (!captureEnabled) {
+    return;
+  }
   await ensureRestored();
   const numericTabId = Number(tabId);
   const numericWindowId = Number(windowId);

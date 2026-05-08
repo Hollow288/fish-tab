@@ -36,6 +36,7 @@ const elements = {
   openSettings: document.querySelector('[data-action="open-settings"]'),
   closeSettings: document.querySelector('[data-action="close-settings"]'),
   settingsPanel: document.querySelector(".settings-panel"),
+  settingsPreviewToggle: document.querySelector('[data-setting="previewEnabled"]'),
   settingsToggle: document.querySelector('[data-setting="periodicCaptureEnabled"]'),
   settingsInterval: document.querySelector('[data-setting="periodicCaptureIntervalMs"]'),
   stats: document.querySelector(".app-stats"),
@@ -85,6 +86,9 @@ function initialize() {
   }
   if (elements.closeSettings) {
     elements.closeSettings.addEventListener("click", closeSettingsPanel);
+  }
+  if (elements.settingsPreviewToggle) {
+    elements.settingsPreviewToggle.addEventListener("change", handlePreviewToggleChange);
   }
   if (elements.settingsToggle) {
     elements.settingsToggle.addEventListener("change", handleSettingsToggleChange);
@@ -259,6 +263,10 @@ function initHoverPreview() {
 
 function handleGroupsMouseMove(event) {
   if (state.view !== VIEW_OPEN) {
+    return;
+  }
+
+  if (!settingsState.values.previewEnabled) {
     return;
   }
 
@@ -1268,15 +1276,21 @@ function loadSettings() {
 }
 
 function applySettingsToControls() {
+  const previewEnabled = settingsState.values.previewEnabled;
+  if (elements.settingsPreviewToggle) {
+    elements.settingsPreviewToggle.checked = previewEnabled;
+  }
   if (elements.settingsToggle) {
     elements.settingsToggle.checked = settingsState.values.periodicCaptureEnabled;
+    elements.settingsToggle.disabled = !previewEnabled;
   }
   if (elements.settingsInterval) {
     const value = String(settingsState.values.periodicCaptureIntervalMs);
     if (PERIODIC_CAPTURE_INTERVAL_OPTIONS_MS.map(String).includes(value)) {
       elements.settingsInterval.value = value;
     }
-    elements.settingsInterval.disabled = !settingsState.values.periodicCaptureEnabled;
+    elements.settingsInterval.disabled =
+      !previewEnabled || !settingsState.values.periodicCaptureEnabled;
   }
 }
 
@@ -1287,6 +1301,19 @@ function persistSettings() {
   }
 
   storage.set({ [SETTINGS_STORAGE_KEY]: { ...settingsState.values } });
+}
+
+function handlePreviewToggleChange(event) {
+  const enabled = Boolean(event.target.checked);
+  settingsState.values = sanitizeSettings({
+    ...settingsState.values,
+    previewEnabled: enabled
+  });
+  applySettingsToControls();
+  persistSettings();
+  if (!enabled) {
+    resetHoverPreview();
+  }
 }
 
 function handleSettingsToggleChange(event) {
