@@ -12,7 +12,8 @@
     "sidePanel",
     "storage",
     "sessions",
-    "favicon"
+    "favicon",
+    "idle"
   ],
   "host_permissions": [
     "<all_urls>"

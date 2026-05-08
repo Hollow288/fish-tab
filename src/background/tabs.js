@@ -1,5 +1,22 @@
 const RECENTLY_CLOSED_MAX_RESULTS = 25;
 
+const INTERNAL_PROTOCOLS = new Set([
+  "chrome:",
+  "chrome-extension:",
+  "chrome-untrusted:",
+  "chrome-search:",
+  "chrome-error:",
+  "edge:",
+  "edge-extension:",
+  "about:",
+  "devtools:",
+  "view-source:",
+  "data:",
+  "file:",
+  "javascript:",
+  "blob:"
+]);
+
 export async function getGroupedTabs() {
   const tabs = await chrome.tabs.query({});
   const normalizedTabs = tabs
@@ -16,7 +33,11 @@ export async function getGroupedTabs() {
   }
 
   const groups = Array.from(groupMap.values())
-    .map((group) => ({ ...group, tabs: group.tabs.sort(sortTabs) }))
+    .map((group) => ({
+      ...group,
+      tabs: group.tabs.sort(sortTabs),
+      isInternal: group.tabs.every((tab) => tab.isInternal)
+    }))
     .sort(sortGroups);
 
   return {
@@ -68,6 +89,87 @@ export async function restoreSession(sessionId) {
   }
 
   await chrome.sessions.restore(normalizedSessionId);
+}
+
+export async function tidyAllWindows() {
+  const allWindows = await chrome.windows.getAll({
+    populate: true,
+    windowTypes: ["normal"]
+  });
+  const candidates = allWindows.filter(
+    (window) =>
+      window &&
+      !window.incognito &&
+      typeof window.id === "number" &&
+      Array.isArray(window.tabs) &&
+      window.tabs.length > 0
+  );
+
+  if (candidates.length === 0) {
+    throw new Error("没有可整理的窗口");
+  }
+
+  const targetWindow =
+    candidates.find((window) => window.focused) ||
+    candidates.reduce(
+      (best, current) => (current.tabs.length > best.tabs.length ? current : best),
+      candidates[0]
+    );
+  const targetWindowId = targetWindow.id;
+  const focusedActiveId = targetWindow.tabs.find((tab) => tab.active)?.id ?? null;
+
+  const allTabs = candidates.flatMap((window) => window.tabs);
+  const orderedTabs = orderTabsByDomain(allTabs);
+  if (orderedTabs.length === 0) {
+    return { targetWindowId, mergedWindowCount: 0, movedTabCount: 0 };
+  }
+
+  const pinnedIds = new Set(
+    orderedTabs.filter((tab) => tab.pinned).map((tab) => tab.id)
+  );
+
+  for (const id of pinnedIds) {
+    try {
+      await chrome.tabs.update(id, { pinned: false });
+    } catch (_error) {
+      // Some tabs may have been closed mid-flight; ignore and continue.
+    }
+  }
+
+  const orderedIds = orderedTabs.map((tab) => tab.id);
+  await chrome.tabs.move(orderedIds, { windowId: targetWindowId, index: -1 });
+
+  for (const id of orderedIds) {
+    if (!pinnedIds.has(id)) {
+      continue;
+    }
+
+    try {
+      await chrome.tabs.update(id, { pinned: true });
+    } catch (_error) {
+      // Tab may be gone; skip.
+    }
+  }
+
+  if (Number.isInteger(focusedActiveId)) {
+    try {
+      await chrome.tabs.update(focusedActiveId, { active: true });
+    } catch (_error) {
+      // Active tab may have been closed; ignore.
+    }
+  }
+
+  try {
+    await chrome.windows.update(targetWindowId, { focused: true });
+  } catch (_error) {
+    // Window may not be focusable on some platforms; ignore.
+  }
+
+  return {
+    targetWindowId,
+    mergedWindowCount: candidates.length,
+    movedTabCount: orderedIds.length
+  };
 }
 
 export async function closeTabs(tabIds) {
@@ -164,8 +266,22 @@ function normalizeTab(tab) {
     pinned: Boolean(tab.pinned),
     audible: Boolean(tab.audible),
     discarded: Boolean(tab.discarded),
-    domain
+    domain,
+    isInternal: isInternalUrl(tab.url)
   };
+}
+
+function isInternalUrl(rawUrl) {
+  if (!rawUrl) {
+    return true;
+  }
+
+  try {
+    const url = new URL(rawUrl);
+    return INTERNAL_PROTOCOLS.has(url.protocol.toLowerCase());
+  } catch (_error) {
+    return true;
+  }
 }
 
 function getRecentlyClosedMaxResults() {
@@ -228,7 +344,57 @@ function protocolLabel(protocol) {
   }
 }
 
+function orderTabsByDomain(tabs) {
+  const normalized = tabs
+    .filter((tab) => tab && typeof tab.id === "number")
+    .map((tab) => ({
+      id: tab.id,
+      windowId: tab.windowId,
+      index: tab.index,
+      pinned: Boolean(tab.pinned),
+      domain: getDisplayDomain(tab.url),
+      isInternal: isInternalUrl(tab.url)
+    }));
+
+  const groupMap = new Map();
+  for (const tab of normalized) {
+    if (!groupMap.has(tab.domain)) {
+      groupMap.set(tab.domain, { domain: tab.domain, tabs: [] });
+    }
+
+    groupMap.get(tab.domain).tabs.push(tab);
+  }
+
+  const sortedGroups = Array.from(groupMap.values())
+    .map((group) => ({
+      ...group,
+      tabs: group.tabs.slice().sort(sortTabs),
+      isInternal: group.tabs.every((tab) => tab.isInternal)
+    }))
+    .sort(sortGroups);
+
+  const pinned = [];
+  const others = [];
+  for (const group of sortedGroups) {
+    for (const tab of group.tabs) {
+      if (tab.pinned) {
+        pinned.push(tab);
+      } else {
+        others.push(tab);
+      }
+    }
+  }
+
+  return [...pinned, ...others];
+}
+
 function sortGroups(first, second) {
+  const firstInternal = Boolean(first.isInternal);
+  const secondInternal = Boolean(second.isInternal);
+  if (firstInternal !== secondInternal) {
+    return firstInternal ? 1 : -1;
+  }
+
   const firstSortKey = getSecondLevelSortKey(first.domain);
   const secondSortKey = getSecondLevelSortKey(second.domain);
   const bySecondLevelDomain = firstSortKey.localeCompare(secondSortKey, "en", {

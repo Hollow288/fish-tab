@@ -1,12 +1,35 @@
 const SESSION_KEY = "fishTabCaptures";
 const MAX_ENTRIES = 40;
-const CAPTURE_THROTTLE_MS = 500;
+const PER_TAB_THROTTLE_MS = 1500;
+const PER_WINDOW_THROTTLE_MS = 650;
+const TRANSIENT_RETRY_DELAY_MS = 1800;
+const MAX_TRANSIENT_RETRIES = 1;
 const RESIZED_WIDTH = 640;
 const JPEG_QUALITY = 0.65;
 
+const UNCAPTURABLE_SCHEMES = /^(chrome|edge|about|chrome-extension|chrome-untrusted|devtools|view-source):/i;
+
+const TRANSIENT_ERROR_FRAGMENTS = [
+  "user may be dragging",
+  "MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND"
+];
+
+const SILENT_ERROR_FRAGMENTS = [
+  "activeTab",
+  "Cannot access contents",
+  "No tab with id",
+  "No window with id",
+  "extension manifest must request permission"
+];
+
 const cache = new Map();
-const captureCooldowns = new Map();
+const tabCooldowns = new Map();
+const windowCooldowns = new Map();
+const inflightWindows = new Set();
+const retryTimers = new Map();
 let restorePromise = null;
+let persistInFlight = false;
+let persistPending = false;
 
 export function ensureRestored() {
   if (!restorePromise) {
@@ -24,11 +47,48 @@ export async function captureForTab(tabId, windowId, options = {}) {
   }
 
   const now = Date.now();
-  const last = captureCooldowns.get(numericTabId) || 0;
-  if (!options.force && now - last < CAPTURE_THROTTLE_MS) {
+  const lastTab = tabCooldowns.get(numericTabId) || 0;
+  if (!options.force && now - lastTab < PER_TAB_THROTTLE_MS) {
     return;
   }
-  captureCooldowns.set(numericTabId, now);
+
+  const lastWindow = windowCooldowns.get(numericWindowId) || 0;
+  if (now - lastWindow < PER_WINDOW_THROTTLE_MS) {
+    return;
+  }
+
+  if (inflightWindows.has(numericWindowId)) {
+    return;
+  }
+
+  let tab;
+  try {
+    tab = await chrome.tabs.get(numericTabId);
+  } catch (_error) {
+    return;
+  }
+
+  if (!tab || tab.active !== true) {
+    return;
+  }
+
+  const tabUrl = tab.url || "";
+  if (!tabUrl || UNCAPTURABLE_SCHEMES.test(tabUrl)) {
+    return;
+  }
+
+  try {
+    const win = await chrome.windows.get(numericWindowId);
+    if (!win?.focused) {
+      return;
+    }
+  } catch (_error) {
+    return;
+  }
+
+  inflightWindows.add(numericWindowId);
+  windowCooldowns.set(numericWindowId, now);
+  tabCooldowns.set(numericTabId, now);
 
   let dataUrl;
   try {
@@ -37,38 +97,61 @@ export async function captureForTab(tabId, windowId, options = {}) {
       quality: 60
     });
   } catch (error) {
-    console.warn("[fish-tab] captureVisibleTab failed", { tabId: numericTabId, windowId: numericWindowId, error });
+    inflightWindows.delete(numericWindowId);
+    handleCaptureError(error, numericTabId, numericWindowId, options);
     return;
   }
 
+  inflightWindows.delete(numericWindowId);
+
   if (!dataUrl) {
-    console.warn("[fish-tab] captureVisibleTab returned empty", { tabId: numericTabId, windowId: numericWindowId });
     return;
   }
 
   let resized;
   try {
     resized = await resizeJpeg(dataUrl, RESIZED_WIDTH, JPEG_QUALITY);
-  } catch (error) {
-    console.warn("[fish-tab] resize failed; using original", { tabId: numericTabId, error });
-    resized = dataUrl;
-  }
-
-  let url = "";
-  try {
-    const tab = await chrome.tabs.get(numericTabId);
-    url = tab?.url || "";
   } catch (_error) {
-    // Tab may have closed mid-capture; the entry is still useful.
+    resized = dataUrl;
   }
 
   setCacheEntry(numericTabId, {
     dataUrl: resized,
     capturedAt: now,
-    url
+    url: tabUrl
   });
 
   await persistToSession();
+}
+
+function handleCaptureError(error, tabId, windowId, options) {
+  const message = String(error?.message || error || "");
+  const isTransient = TRANSIENT_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment));
+  const isSilent = SILENT_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment));
+
+  if (isTransient) {
+    const retries = Number(options._retries) || 0;
+    if (retries < MAX_TRANSIENT_RETRIES) {
+      const existing = retryTimers.get(tabId);
+      if (existing) {
+        clearTimeout(existing);
+      }
+      const timer = setTimeout(() => {
+        retryTimers.delete(tabId);
+        // Reset cooldowns so the retry isn't blocked by its own pre-attempt timestamp.
+        tabCooldowns.delete(tabId);
+        void captureForTab(tabId, windowId, { force: true, _retries: retries + 1 });
+      }, TRANSIENT_RETRY_DELAY_MS);
+      retryTimers.set(tabId, timer);
+    }
+    return;
+  }
+
+  if (isSilent) {
+    return;
+  }
+
+  console.warn("[fish-tab] captureVisibleTab failed", { tabId, windowId, error });
 }
 
 export async function getCapture(tabId) {
@@ -79,7 +162,12 @@ export async function getCapture(tabId) {
 export async function removeCapture(tabId) {
   await ensureRestored();
   const numericTabId = Number(tabId);
-  captureCooldowns.delete(numericTabId);
+  tabCooldowns.delete(numericTabId);
+  const retryTimer = retryTimers.get(numericTabId);
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimers.delete(numericTabId);
+  }
   if (cache.delete(numericTabId)) {
     await persistToSession();
   }
@@ -131,6 +219,23 @@ async function persistToSession() {
     return;
   }
 
+  persistPending = true;
+  if (persistInFlight) {
+    return;
+  }
+
+  persistInFlight = true;
+  try {
+    while (persistPending) {
+      persistPending = false;
+      await writeSessionSnapshot();
+    }
+  } finally {
+    persistInFlight = false;
+  }
+}
+
+async function writeSessionSnapshot() {
   const snapshot = Object.fromEntries(cache);
   try {
     await chrome.storage.session.set({ [SESSION_KEY]: snapshot });

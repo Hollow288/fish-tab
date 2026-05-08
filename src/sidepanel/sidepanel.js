@@ -32,7 +32,7 @@ const state = {
 
 const elements = {
   toggleAll: document.querySelector('[data-action="toggle-all"]'),
-  refresh: document.querySelector('[data-action="refresh"]'),
+  tidyWindows: document.querySelector('[data-action="tidy-windows"]'),
   openSettings: document.querySelector('[data-action="open-settings"]'),
   closeSettings: document.querySelector('[data-action="close-settings"]'),
   settingsPanel: document.querySelector(".settings-panel"),
@@ -70,7 +70,9 @@ initialize();
 
 function initialize() {
   elements.toggleAll.addEventListener("click", toggleAllGroups);
-  elements.refresh.addEventListener("click", () => refreshCurrentView());
+  if (elements.tidyWindows) {
+    elements.tidyWindows.addEventListener("click", tidyWindows);
+  }
   elements.groups.addEventListener("click", handleGroupsClick);
   elements.groups.addEventListener("keydown", handleGroupsKeydown);
   elements.searchInput.addEventListener("input", handleSearchInput);
@@ -398,6 +400,30 @@ function findTabById(tabId) {
   }
 
   return null;
+}
+
+function tidyWindows() {
+  if (elements.tidyWindows?.disabled) {
+    return;
+  }
+
+  if (elements.tidyWindows) {
+    elements.tidyWindows.disabled = true;
+  }
+
+  sendMessage({ type: MESSAGE_TYPES.TIDY_WINDOWS }, (response) => {
+    if (elements.tidyWindows) {
+      elements.tidyWindows.disabled = false;
+    }
+
+    if (!response || !response.ok) {
+      state.error = response?.error || "整理窗口失败。";
+      render();
+      return;
+    }
+
+    refreshCurrentView({ silent: true });
+  });
 }
 
 function refreshCurrentView(options = {}) {

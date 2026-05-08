@@ -16,11 +16,13 @@ import {
   closeTabs,
   getGroupedTabs,
   getRecentlyClosedSessions,
-  restoreSession
+  restoreSession,
+  tidyAllWindows
 } from "./tabs.js";
 
 const TABS_CHANGED_DEBOUNCE_MS = 120;
 const ACTIVATION_SETTLE_DELAY_MS = 1500;
+const IDLE_DETECTION_INTERVAL_S = 60;
 
 let tabsChangedTimer = null;
 
@@ -34,6 +36,7 @@ const tracking = {
 };
 
 let focusedWindowId = chrome.windows?.WINDOW_ID_NONE ?? -1;
+let idleState = "active";
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -105,6 +108,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === MESSAGE_TYPES.RESTORE_SESSION) {
     restoreSession(message.sessionId)
       .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error) }));
+    return true;
+  }
+
+  if (message.type === MESSAGE_TYPES.TIDY_WINDOWS) {
+    tidyAllWindows()
+      .then((payload) => sendResponse({ ok: true, ...payload }))
       .catch((error) => sendResponse({ ok: false, error: getErrorMessage(error) }));
     return true;
   }
@@ -183,6 +193,29 @@ for (const event of otherTabEvents) {
 
 if (chrome.sessions?.onChanged && typeof chrome.sessions.onChanged.addListener === "function") {
   chrome.sessions.onChanged.addListener(scheduleTabsChangedNotification);
+}
+
+if (chrome.idle) {
+  try {
+    chrome.idle.setDetectionInterval(IDLE_DETECTION_INTERVAL_S);
+  } catch (_error) {
+    // Older platforms may not allow this; fall back to default interval.
+  }
+
+  chrome.idle.queryState(IDLE_DETECTION_INTERVAL_S, (state) => {
+    if (typeof state === "string") {
+      idleState = state;
+    }
+  });
+
+  chrome.idle.onStateChanged.addListener((state) => {
+    idleState = state;
+    if (state === "active" && tracking.tabId !== null && tracking.windowId !== null) {
+      // Wake up: refresh the active tab's capture and resume periodic ticks.
+      void captureForTab(tracking.tabId, tracking.windowId, { force: true });
+      restartPeriodicCapture();
+    }
+  });
 }
 
 async function handleGetCapture(tabId) {
@@ -281,7 +314,7 @@ function scheduleSettleCapture(tabId, windowId) {
   tracking.settleTimer = setTimeout(() => {
     tracking.settleTimer = null;
     if (tracking.tabId === tabId && tracking.windowId === windowId) {
-      void captureForTab(tabId, windowId, { force: true });
+      void captureForTab(tabId, windowId);
     }
   }, ACTIVATION_SETTLE_DELAY_MS);
 }
@@ -307,7 +340,8 @@ function restartPeriodicCapture() {
     if (
       tracking.tabId === tabId &&
       tracking.windowId === windowId &&
-      focusedWindowId === windowId
+      focusedWindowId === windowId &&
+      idleState === "active"
     ) {
       void captureForTab(tabId, windowId, { force: true });
     }
